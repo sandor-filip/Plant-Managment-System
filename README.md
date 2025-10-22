@@ -1,10 +1,5 @@
 # Plant Growth Control System
 
-Arduino-based smart greenhouse controller that automatically manages temperature, humidity, soil moisture, and lighting for optimal plant growth.  
-This version includes PID-driven temperature control, EEPROM-based soil calibration, and non-blocking relay logic for long-term stable operation.
-
----
-
 ## Features
 
 ### Air & Soil Monitoring
