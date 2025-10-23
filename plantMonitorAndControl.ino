@@ -5,55 +5,37 @@
 #include <PID_v1.h>
 #include <EEPROM.h>
 
-// ============================================================================
-// ======================= HARDWARE CONFIGURATION =============================
-// ============================================================================
-
-// DHT11 sensor pin and type
 #define DHTPIN 2
 #define DHTTYPE DHT11
-
-// DS18B20 OneWire bus
 #define ONE_WIRE_BUS 3
-
-// DS1307 I2C address
 #define DS1307_I2C_ADDRESS 0x68
 
-// Analog inputs for soil moisture sensors
 const byte soilMoisturePins[] = {A3, A4};
 const int NUM_SOIL_SENSORS = sizeof(soilMoisturePins) / sizeof(soilMoisturePins[0]);
 
-// EEPROM addresses for soil calibration values
 #define EEPROM_ADDR_LOW  0
 #define EEPROM_ADDR_HIGH 2
 
-// Relay configuration (active LOW logic)
+bool DEBUG = true;
+
 struct Relay {
   byte pin;
-  const char* name;
+  const __FlashStringHelper* name;
 };
 Relay relays[] = {
-  {5, "light"},
-  {4, "fan_heater"},
-  {9, "air_heater"},
-  {11, "soil_pump"},
-  {10, "fan_in"},
-  {6, "fan_out"},
-  {7, "air_pump"},
-  {8, "soil_heater"}
+  {5, F("light")},
+  {4, F("fan_heater")},
+  {9, F("air_heater")},
+  {11, F("soil_pump")},
+  {10, F("fan_in")},
+  {6, F("fan_out")},
+  {7, F("air_pump")},
+  {8, F("soil_heater")}
 };
 
-// ============================================================================
-// ============================= SENSOR OBJECTS ===============================
-// ============================================================================
-
-DHT dht(DHTPIN, DHTTYPE);            // Air temperature & humidity sensor
-OneWire oneWire(ONE_WIRE_BUS);       // OneWire bus for DS18B20
-DallasTemperature sensors(&oneWire); // Soil temperature sensor
-
-// ============================================================================
-// ============================= DATA STRUCTURES ==============================
-// ============================================================================
+DHT dht(DHTPIN, DHTTYPE);
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
 
 struct SensorData {
   double airTemp;
@@ -68,12 +50,6 @@ struct Time {
   byte second;
 };
 
-// ============================================================================
-// ============================= RTC FUNCTIONS ================================
-// ============================================================================
-
-byte decToBcd(byte val) { return ((val / 10 * 16) + (val % 10)); }
-
 byte bcdToDec(byte val) { return ((val / 16 * 10) + (val % 16)); }
 
 Time readTime() {
@@ -81,17 +57,12 @@ Time readTime() {
   Wire.write(0);
   Wire.endTransmission();
   Wire.requestFrom(DS1307_I2C_ADDRESS, 7);
-
   Time t;
   t.second = bcdToDec(Wire.read() & 0x7F);
   t.minute = bcdToDec(Wire.read());
   t.hour = bcdToDec(Wire.read() & 0x3F);
   return t;
 }
-
-// ============================================================================
-// ============================ RELAY FUNCTIONS ===============================
-// ============================================================================
 
 void setupRelays() {
   for (auto &r : relays) {
@@ -100,16 +71,12 @@ void setupRelays() {
   }
 }
 
-void setRelay(byte pin, bool on) {
+inline void setRelay(byte pin, bool on) {
   digitalWrite(pin, on ? LOW : HIGH);
 }
 
-// ============================================================================
-// ========================= SOIL MOISTURE CALIBRATION ========================
-// ============================================================================
-
-int map_low = 1000;  // Default dry calibration
-int map_high = 200;  // Default wet calibration
+int map_low = 1000;
+int map_high = 200;
 
 void loadSoilCalibration() {
   EEPROM.get(EEPROM_ADDR_LOW, map_low);
@@ -118,36 +85,13 @@ void loadSoilCalibration() {
     map_low = 1000;
     map_high = 200;
   }
-  Serial.print("[INFO] Soil calibration loaded. Dry=");
-  Serial.print(map_low);
-  Serial.print(" Wet=");
-  Serial.println(map_high);
+  if (DEBUG) {
+    Serial.print(F("Soil calibration: dry="));
+    Serial.print(map_low);
+    Serial.print(F(" wet="));
+    Serial.println(map_high);
+  }
 }
-
-void calibrateSoilMoisture() {
-  Serial.println("=== Soil Calibration Mode ===");
-  Serial.println("Step 1: Keep sensors DRY and wait 5 seconds...");
-  delay(5000);
-  int drySum = 0;
-  for (int i = 0; i < NUM_SOIL_SENSORS; i++) drySum += analogRead(soilMoisturePins[i]);
-  map_low = drySum / NUM_SOIL_SENSORS;
-  Serial.print("Dry average: "); Serial.println(map_low);
-
-  Serial.println("Step 2: Place sensors in WATER and wait 5 seconds...");
-  delay(5000);
-  int wetSum = 0;
-  for (int i = 0; i < NUM_SOIL_SENSORS; i++) wetSum += analogRead(soilMoisturePins[i]);
-  map_high = wetSum / NUM_SOIL_SENSORS;
-  Serial.print("Wet average: "); Serial.println(map_high);
-
-  EEPROM.put(EEPROM_ADDR_LOW, map_low);
-  EEPROM.put(EEPROM_ADDR_HIGH, map_high);
-  Serial.println("[OK] Calibration saved to EEPROM.");
-}
-
-// ============================================================================
-// ============================ SENSOR READING ================================
-// ============================================================================
 
 double readSoilMoisture() {
   int sum = 0;
@@ -164,52 +108,34 @@ SensorData readSensors() {
   sensors.requestTemperatures();
   data.soilTemp = sensors.getTempCByIndex(0);
   data.soilHum = readSoilMoisture();
-
-  // Fallback values in case of sensor errors
   if (isnan(data.airTemp)) data.airTemp = 25;
   if (isnan(data.airHum)) data.airHum = 60;
   if (data.soilTemp < -10 || data.soilTemp > 80) data.soilTemp = 25;
-
   return data;
 }
 
-// ============================================================================
-// ============================== PID CONTROLLERS =============================
-// ============================================================================
-
 double airTempInput, airTempOutput, airTempSetpoint = 24.0;
-
 double soilTempInput, soilTempOutput, soilTempSetpoint = 25.0;
 
 PID airPID(&airTempInput, &airTempOutput, &airTempSetpoint, 2.0, 5.0, 1.0, DIRECT);
 PID soilPID(&soilTempInput, &soilTempOutput, &soilTempSetpoint, 2.5, 4.0, 1.0, DIRECT);
 
-// ============================================================================
-// =========================== CONTROL CONSTANTS ==============================
-// ============================================================================
-
-const double DEAD_BAND = 0.5;       
-const unsigned long TIME_INTERVAL = 10000; 
+const unsigned long TIME_INTERVAL = 10000;
 unsigned long airCycleStart = 0;
 unsigned long soilCycleStart = 0;
 
-// ============================================================================
-// ============================== CONTROL LOGIC ===============================
-// ============================================================================
-
 void controlLight(int hour) {
-  bool on = (hour >= 6 && hour <= 23);
-  setRelay(relays[0].pin, on);
+  setRelay(relays[0].pin, (hour >= 6 && hour <= 23));
 }
 
 void controlAirHumidity(double hum) {
-  if (hum > 90) {                    
+  if (hum > 90) {
     setRelay(relays[4].pin, true);
     setRelay(relays[5].pin, true);
-  } else if (hum < 80) {              
+  } else if (hum < 80) {
     setRelay(relays[4].pin, true);
     setRelay(relays[6].pin, true);
-  } else {                            
+  } else {
     setRelay(relays[4].pin, false);
     setRelay(relays[5].pin, false);
     setRelay(relays[6].pin, false);
@@ -217,20 +143,16 @@ void controlAirHumidity(double hum) {
 }
 
 void controlSoilHumidity(double hum) {
-  setRelay(relays[3].pin, hum < 85); 
+  setRelay(relays[3].pin, hum < 85);
 }
 
 void controlAirTemperature(double currentTemp) {
   airTempInput = currentTemp;
   airPID.Compute();
-
   unsigned long now = millis();
   if (now - airCycleStart >= TIME_INTERVAL) airCycleStart = now;
-
   int onTime = (int)(airTempOutput / 255.0 * TIME_INTERVAL);
-  bool heaterState = (now - airCycleStart) < onTime;
-  setRelay(relays[2].pin, heaterState);
-
+  setRelay(relays[2].pin, (now - airCycleStart) < onTime);
   if (currentTemp > airTempSetpoint + 2) {
     setRelay(relays[4].pin, true);
     setRelay(relays[5].pin, true);
@@ -243,36 +165,27 @@ void controlAirTemperature(double currentTemp) {
 void controlSoilTemperature(double currentTemp) {
   soilTempInput = currentTemp;
   soilPID.Compute();
-
   unsigned long now = millis();
   if (now - soilCycleStart >= TIME_INTERVAL) soilCycleStart = now;
-
   int onTime = (int)(soilTempOutput / 255.0 * TIME_INTERVAL);
-  bool heaterState = (now - soilCycleStart) < onTime;
-  setRelay(relays[7].pin, heaterState);
+  setRelay(relays[7].pin, (now - soilCycleStart) < onTime);
 }
 
-// ============================================================================
-// ============================ PRINTING FUNCTION =============================
-// ============================================================================
-
-void printData(Time t, SensorData data) {
-  Serial.print("\n[");
+void printData(const Time &t, const SensorData &data) {
+  if (!DEBUG) return;
+  Serial.print(F("["));
   if (t.hour < 10) Serial.print('0');
   Serial.print(t.hour); Serial.print(':');
   if (t.minute < 10) Serial.print('0');
   Serial.print(t.minute); Serial.print(':');
   if (t.second < 10) Serial.print('0');
-  Serial.print(t.second); Serial.println("]");
-  Serial.print("Air: "); Serial.print(data.airTemp); Serial.print("°C ");
-  Serial.print(data.airHum); Serial.println("%");
-  Serial.print("Soil: "); Serial.print(data.soilTemp); Serial.print("°C ");
-  Serial.print(data.soilHum); Serial.println("%");
+  Serial.print(t.second); Serial.print(F("] "));
+  Serial.print(F("Air "));
+  Serial.print(data.airTemp); Serial.print(F("C "));
+  Serial.print(data.airHum); Serial.print(F("% | Soil "));
+  Serial.print(data.soilTemp); Serial.print(F("C "));
+  Serial.print(data.soilHum); Serial.println(F("%"));
 }
-
-// ============================================================================
-// ============================== SETUP FUNCTION ==============================
-// ============================================================================
 
 void setup() {
   Serial.begin(9600);
@@ -280,27 +193,19 @@ void setup() {
   setupRelays();
   dht.begin();
   sensors.begin();
-  loadSoilCalibration(); 
-
+  loadSoilCalibration();
   airPID.SetMode(AUTOMATIC);
   soilPID.SetMode(AUTOMATIC);
   airPID.SetOutputLimits(0, 255);
   soilPID.SetOutputLimits(0, 255);
-
-  Serial.println("Optimized Greenhouse Controller Initialized.\n");
+  if (DEBUG) Serial.println(F("Greenhouse Controller Initialized"));
 }
 
-// ============================================================================
-// =============================== MAIN LOOP ==================================
-// ============================================================================
-
 void loop() {
-  Time t = readTime();    
-  SensorData data = readSensors();
-
-  printData(t, data);         
-
-  controlLight(t.hour);        
+  const Time t = readTime();
+  const SensorData data = readSensors();
+  printData(t, data);
+  controlLight(t.hour);
   controlAirHumidity(data.airHum);
   controlSoilHumidity(data.soilHum);
   controlAirTemperature(data.airTemp);
